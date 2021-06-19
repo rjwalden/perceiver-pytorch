@@ -6,6 +6,14 @@ Implementation of <a href="https://arxiv.org/abs/2103.03206">Perceiver</a>, Gene
 
 <a href="https://www.youtube.com/watch?v=P_xeshTnPZg">Yannic Kilcher explanation!</a>
 
+<img src="./fnet.png" width="300px"></img>
+
+## FNet Modules
+
+Option to subsitute latent self attention with <a href="https://arxiv.org/pdf/2105.03824.pdf">FNet</a>: Mixing Tokens with Fourier Transforms
+
+<a href="https://www.youtube.com/watch?v=JJR3pBl78zw">Yannic Kilcher explanation!</a>
+
 ## Install
 
 ```bash
@@ -33,6 +41,7 @@ model = Perceiver(
     num_classes = 1000,          # output number of classes
     attn_dropout = 0.,
     ff_dropout = 0.,
+    fnet = False,                # whether to subsitute latent self attention with FNet modules
     weight_tie_layers = False,   # whether to weight tie layers (optional, as indicated in the diagram)
     fourier_encode_data = True,  # whether to auto-fourier encode the data, using the input_axis given. defaults to True, but can be turned off if you are fourier encoding the data yourself
     self_per_cross_attn = 2      # number of self attention blocks per cross attention
