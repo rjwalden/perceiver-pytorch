@@ -71,9 +71,10 @@ class FeedForward(nn.Module):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(dim, dim * mult * 2),
-            GEGLU(),
+            GEGLU(), # HYP: nn.GELU()
             nn.Dropout(dropout),
-            nn.Linear(dim * mult, dim)
+            nn.Linear(dim * mult, dim),
+            # HYP: nn.Dropout(dropout)
         )
 
     def forward(self, x):
@@ -123,7 +124,15 @@ class Attention(nn.Module):
         out = rearrange(out, '(b h) n d -> b n (h d)', h = h)
         return self.to_out(out)
 
-# main class
+class FNetBlock(nn.Module):
+  def __init__(self):
+    super().__init__()
+
+  def forward(self, x):
+    x = torch.fft.fft(torch.fft.fft(x, dim=-1), dim=-2).real
+    return x
+
+# main model
 
 class Perceiver(nn.Module):
     def __init__(
@@ -144,17 +153,18 @@ class Perceiver(nn.Module):
         num_classes = 1000,
         attn_dropout = 0.,
         ff_dropout = 0.,
+        fnet = False,
         weight_tie_layers = False,
         fourier_encode_data = True,
         self_per_cross_attn = 1,
-        self_attn_rel_pos = True
+        self_attn_rel_pos = True,
     ):
         super().__init__()
         self.input_axis = input_axis
         self.max_freq = max_freq
         self.num_freq_bands = num_freq_bands
         self.freq_base = freq_base
-
+        self.fnet = fnet
         self.fourier_encode_data = fourier_encode_data
         fourier_channels = (input_axis * ((num_freq_bands * 2) + 1)) if fourier_encode_data else 0
         input_dim = fourier_channels + input_channels
@@ -165,8 +175,10 @@ class Perceiver(nn.Module):
         get_cross_ff = lambda: PreNorm(latent_dim, FeedForward(latent_dim, dropout = ff_dropout))
         get_latent_attn = lambda: PreNorm(latent_dim, Attention(latent_dim, heads = latent_heads, dim_head = latent_dim_head, dropout = attn_dropout))
         get_latent_ff = lambda: PreNorm(latent_dim, FeedForward(latent_dim, dropout = ff_dropout))
+        get_fnet = lambda: PreNorm(latent_dim, FNetBlock())
+        get_fnet_ff = lambda: PreNorm(latent_dim, FeedForward(latent_dim, dropout = ff_dropout))
 
-        get_cross_attn, get_cross_ff, get_latent_attn, get_latent_ff = map(cache_fn, (get_cross_attn, get_cross_ff, get_latent_attn, get_latent_ff))
+        get_cross_attn, get_cross_ff, get_latent_attn, get_latent_ff, get_fnet, get_fnet_ff = map(cache_fn, (get_cross_attn, get_cross_ff, get_latent_attn, get_latent_ff, get_fnet, get_fnet_ff))
 
         self.layers = nn.ModuleList([])
         for i in range(depth):
@@ -177,8 +189,8 @@ class Perceiver(nn.Module):
 
             for _ in range(self_per_cross_attn):
                 self_attns.append(nn.ModuleList([
-                    get_latent_attn(**cache_args),
-                    get_latent_ff(**cache_args)
+                    get_latent_attn(**cache_args) if not self.fnet else get_fnet(**cache_args),
+                    get_latent_ff(**cache_args) if not self.fnet else get_fnet_ff(**cache_args)
                 ]))
 
             self.layers.append(nn.ModuleList([
@@ -219,7 +231,7 @@ class Perceiver(nn.Module):
 
         # rotary embeddings for latents, if specified
 
-        pos_emb = self.sinu_emb(x) if exists(self.sinu_emb) else None
+        pos_emb = self.sinu_emb(x) if exists(self.sinu_emb) and not self.fnet else None
 
         # layers
 
@@ -228,8 +240,10 @@ class Perceiver(nn.Module):
             x = cross_ff(x) + x
 
             for self_attn, self_ff in self_attns:
-                x = self_attn(x, pos_emb = pos_emb) + x
+                x = self_attn(x, pos_emb = pos_emb) + x if not self.fnet else self_attn(x) + x
                 x = self_ff(x) + x
 
         x = x.mean(dim = -2)
         return self.to_logits(x)
+
+
